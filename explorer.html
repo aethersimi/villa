@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Hardhat Explorer</title>
+  <script src="https://cdn.jsdelivr.net/npm/web3@latest/dist/web3.min.js"></script>
+  <style>
+    .container {
+      display: flex;
+      gap: 20px;
+      height: 80vh;
+      margin-top: 20px;
+    }
+    .column {
+      border: 1px solid #ccc;
+      padding: 10px;
+      overflow-y: auto;
+    }
+    .accounts {
+      flex: 1;
+      max-width: 420px;
+      min-width: 400px;
+    }
+    .transactions {
+      flex: 3;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 4px;
+      text-align: left;
+      border-bottom: 1px solid #ddd;
+    }
+    #accounts td {
+      padding: 2px 4px;
+      white-space: nowrap;
+    }
+    #accounts td:first-child {
+      width: 20px;
+    }
+    #accounts td:last-child {
+      word-break: break-all;
+    }
+    tr:hover {
+      background-color: #f5f5f5;
+    }
+    .contract-creation-row {
+      background-color: #e8f5e9;
+    }
+  </style>
+</head>
+<body>
+  <div style="display: flex; justify-content: space-between; align-items: center">
+    <h1>Hardhat Blockchain Explorer</h1>
+    <pre id="node-info" style="margin: 0; padding: 5px; background: #f5f5f5; border-radius: 4px;"></pre>
+  </div>
+
+  <div class="container">
+    <div class="column accounts">
+      <h2>Accounts</h2>
+      <table id="accounts">
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="column transactions">
+      <h2>Transactions</h2>
+      <table>
+        <thead>
+          <tr>
+            <th id="block-header" style="cursor: pointer;">
+              Block <span id="block-sort-indicator">▲</span>
+            </th>
+            <th>Hash</th>
+            <th>From</th>
+            <th>To</th>
+            <th>Value</th>
+            <th>Gas</th>
+            <th>Gas$ (Gwei)</th>
+            <th>Nonce</th>
+          </tr>
+        </thead>
+        <tbody id="transactions"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script>
+    const web3 = new Web3('http://localhost:8545');
+    let accountLetters = new Map();
+
+    function getAccountLetter(address) {
+      if (!address) return '';
+      const letter = accountLetters.get(address.toLowerCase());
+      return letter ? ` (${letter})` : '';
+    }
+
+    async function init() {
+      try {
+        document.getElementById('transactions').innerHTML = 'Loading transactions...';
+        
+        const nodeInfo = await web3.eth.getNodeInfo();
+        document.getElementById('node-info').textContent = nodeInfo;
+
+        const accounts = await web3.eth.getAccounts();
+        const tbody = document.getElementById('accounts').querySelector('tbody');
+        tbody.innerHTML = accounts
+          .map((a, i) => {
+            const letter = String.fromCharCode(65 + i);
+            accountLetters.set(a.toLowerCase(), letter);
+            return `
+              <tr>
+                <td>${letter}</td>
+                <td>${a}</td>
+              </tr>
+            `;
+          })
+          .join('');
+
+        const latestBlockNumber = BigInt(await web3.eth.getBlockNumber());
+        const blockNumbers = Array.from({length: Number(latestBlockNumber) + 1}, (_, i) => i.toString());
+        const blocks = await Promise.all(blockNumbers.map(n => web3.eth.getBlock(n, true)));
+        const allTransactions = blocks.flatMap(b => b.transactions);
+        const transactionsDiv = document.getElementById('transactions');
+        
+        if (allTransactions && allTransactions.length > 0) {
+          transactionsDiv.innerHTML = allTransactions
+            .map(tx => `
+              <tr class="${!tx.to ? 'contract-creation-row' : ''}" id="tx-${tx.hash}">
+                <td>${tx.blockNumber}</td>
+                <td>${tx.hash.slice(0, 5)}...${tx.hash.slice(-7)}</td>
+                <td>${tx.from}${getAccountLetter(tx.from)}</td>
+                <td>${tx.to ? `${tx.to}${getAccountLetter(tx.to)}` : 'Contract Creation'}</td>
+                <td>${tx.value ? web3.utils.fromWei(tx.value, 'ether') : '0'} ETH</td>
+                <td>${tx.gas}</td>
+                <td>${web3.utils.fromWei(tx.gasPrice || '0', 'gwei')}</td>
+                <td>${tx.nonce}</td>
+              </tr>
+            `)
+            .join('');
+        } else {
+          transactionsDiv.textContent = 'No transactions found';
+        }
+      } catch (error) {
+        console.error('Error fetching data:', error);
+        document.getElementById('transactions').innerHTML = 
+          `Error loading transactions: ${error.message}`;
+      }
+    }
+
+    async function refresh() {
+      try {
+        const latestBlockNumber = BigInt(await web3.eth.getBlockNumber());
+        const blockNumbers = Array.from({length: Number(latestBlockNumber) + 1}, (_, i) => i.toString());
+        const blocks = await Promise.all(blockNumbers.map(n => web3.eth.getBlock(n, true)));
+        const allTransactions = blocks.flatMap(b => b.transactions);
+        updateTransactions(allTransactions);
+      } catch (error) {
+        console.error('Error refreshing data:', error);
+      }
+    }
+
+    let sortDirection = 'asc';
+
+    function sortTransactions(transactions) {
+      return transactions.sort((a, b) => {
+        const blockA = Number(a.blockNumber);
+        const blockB = Number(b.blockNumber);
+        return sortDirection === 'asc' ? blockA - blockB : blockB - blockA;
+      });
+    }
+
+    function updateTransactions(transactions) {
+      const transactionsDiv = document.getElementById('transactions');
+      if (transactions && transactions.length > 0) {
+        const sortedTransactions = sortTransactions(transactions);
+        transactionsDiv.innerHTML = sortedTransactions
+          .map(tx => `
+            <tr class="${!tx.to ? 'contract-creation-row' : ''}" id="tx-${tx.hash}">
+              <td>${tx.blockNumber}</td>
+              <td>${tx.hash.slice(0, 5)}...${tx.hash.slice(-7)}</td>
+              <td>${tx.from}${getAccountLetter(tx.from)}</td>
+              <td>${tx.to ? `${tx.to}${getAccountLetter(tx.to)}` : 'Contract Creation'}</td>
+              <td>${tx.value ? web3.utils.fromWei(tx.value, 'ether') : '0'} ETH</td>
+              <td>${tx.gas}</td>
+              <td>${web3.utils.fromWei(tx.gasPrice || '0', 'gwei')}</td>
+              <td>${tx.nonce}</td>
+            </tr>
+          `)
+          .join('');
+      } else {
+        transactionsDiv.textContent = 'No transactions found';
+      }
+    }
+
+    document.getElementById('block-header').addEventListener('click', () => {
+      sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      document.getElementById('block-sort-indicator').textContent = 
+        sortDirection === 'asc' ? '▲' : '▼';
+      refresh();
+    });
+
+    init();
+    setInterval(refresh, 5000);
+  </script>
+</body>
+</html>
